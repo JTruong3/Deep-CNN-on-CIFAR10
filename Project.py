@@ -22,15 +22,18 @@ from utils import DenseNet121
 from utils import save, load
 
 # Is there a model to Load?
-Load_Model = False # Set to True if there is a model to load
+load_model = False # Set to True if there is a model to load
+train_model = False # Set to False if Testing instead of Training
 
-current_time = datetime.now().strftime("%d:%m:%Y-%H:%M:%S")
-writer = SummaryWriter('logs/{}'.format(current_time))
+# Tensorboard Things
+# current_time = datetime.now().strftime("%d:%m:%Y-%H:%M:%S")
+# writer = SummaryWriter('logs/{}'.format(current_time))
 checkpoint_path = "checkpoint/model.pt"
 
 # Use GPU if it is available
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+if torch.cuda.is_available():
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 
 # Transforming images before training/testing
 np.random.seed(101)
@@ -61,13 +64,11 @@ test_loader = DataLoader(test_data, batch_size = batch_sze, num_workers = 8)
 
 # Model 
 models = DenseNet121()
-print(models)
-
 models = nn.DataParallel(models).to(device) # Run the model and split the data between different GPUs
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(models.parameters())
 
-if Load_Model:
+if load_model:
     epoch_num , loss = load(checkpoint_path, models, optimizer)
     print("Epoch: {} | Loss: {}".format(epoch_num,loss))
   
@@ -79,52 +80,58 @@ test_losses = []
 train_correct = []
 test_correct = []
 
+if train_model:
+    for i in range(epochs):
+        trn_corr = 0
+        tst_corr = 0
+        models.train()
+        train_progress_bar = tqdm(train_loader)
+        # Run the training batches
+        for b, (train_imgs, train_lbls) in enumerate(train_progress_bar):
+            b+=1
+            glob_step = (i * len(train_progress_bar)) + b
+            train_imgs, train_lbls = train_imgs.to(device), train_lbls.to(device)
 
-for i in range(epochs):
-    trn_corr = 0
-    tst_corr = 0
-    models.train()
-    train_progress_bar = tqdm(train_loader)
-    # Run the training batches
-    for b, (train_imgs, train_lbls) in enumerate(train_progress_bar):
-        b+=1
-        glob_step = (i * len(train_progress_bar)) + b
-        train_imgs, train_lbls = train_imgs.to(device), train_lbls.to(device)
-
-        # Apply the model
-        y_pred = models(train_imgs) #[Batch, # Classes]
-        loss = criterion(y_pred, train_lbls)
- 
-        # Tally the number of correct predictions
-        predicted = torch.max(y_pred.data, 1)[1] #[Batch_size]
-        batch_corr = (predicted == train_lbls).sum() # [# correct]
-        trn_corr += batch_corr
-        
-        # Update parameters
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-        
-        # Print interim results
-        writer.add_embedding(y_pred, metadata = train_lbls, label_img = train_imgs, global_step= glob_step)
-        if b%200 == 0:
-            print(f'epoch: {i:2}  batch: {b:4} [{b:6}/1329]  loss: {loss.item():10.8f}  \
-                    accuracy: {trn_corr.item()*100/(32*b):7.3f}%')
+            # Apply the model
+            y_pred = models(train_imgs) #[Batch, # Classes]
+            loss = criterion(y_pred, train_lbls)
     
-    # models.eval() # Set model to evaluate
-    # with torch.no_grad():
-    #     val_progress_bar = tqdm(val_loader)
-    #     for b, (val_imgs, val_lbls) in enumerate(val_progress_bar):
-    #         val_imgs, val_lbls = val_imgs.cuda(), val_lbls.cuda()
+            # Tally the number of correct predictions
+            predicted = torch.max(y_pred.data, 1)[1] #[Batch_size]
+            batch_corr = (predicted == train_lbls).sum() # [# correct]
+            trn_corr += batch_corr
+            
+            # Update parameters
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            
+            # Print interim results
+            # writer.add_embedding(y_pred, metadata = train_lbls, label_img = train_imgs, global_step= glob_step)
+            if b%200 == 0:
+                print(f'epoch: {i:2}  batch: {b:4} [{b:6}/1329]  loss: {loss.item():10.8f}  \
+                        accuracy: {trn_corr.item()*100/(32*b):7.3f}%')
+            
+        train_losses.append(loss)
+        train_correct.append(trn_corr)
 
-    #         prediction = models(val_imgs)
-    #         loss = criterion(prediction, val_lbls)
+else:
+    test_corr = 0
+    models.eval() # Set model to evaluate
+    with torch.no_grad():
+        test_progress_bar = tqdm(test_loader)
+        for b, (test_imgs, test_lbls) in enumerate(test_progress_bar):
+            b+=1
+            test_imgs, test_lbls = test_imgs.to(device), test_lbls.to(device)
 
-
-    #         pass
-        
-    train_losses.append(loss)
-    train_correct.append(trn_corr)
+            prediction = models(test_imgs)
+            loss = criterion(prediction, test_lbls)
+            predicted = torch.max(prediction.data, 1)[1] #[Batch_size]
+            batch_corr = (predicted == test_lbls).sum() # [# correct]
+            test_corr += batch_corr
+            if b%50 == 0:
+                print(f'loss: {loss.item():10.8f}  \
+                    accuracy: {test_corr.item()*100/(32*b):7.3f}%')
 
     
 save(checkpoint_path, epochs, models, optimizer, loss)

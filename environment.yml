@@ -1,0 +1,13 @@
+name: torch-env
+channels:
+  - anaconda
+  - conda-forge
+  - defaults
+  - pytorch
+dependencies:
+  - python
+  - numpy
+  - tqdm
+  - pytorch>=1.6.0
+  - torchvision
+  - scikit-learn
